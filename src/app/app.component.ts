@@ -1,83 +1,186 @@
-import { Component, OnInit } from '@angular/core';
+import {
+  Component,
+  OnInit,
+  Injectable,
+  ViewChild,
+  ElementRef,
+  AfterViewInit,
+  OnDestroy,
+} from '@angular/core';
+import {
+  fromEventPattern,
+  BehaviorSubject,
+  of,
+  fromEvent,
+  Subject,
+} from 'rxjs';
+import {
+  map,
+  tap,
+  debounceTime,
+  switchMap,
+  catchError,
+  delay,
+  takeUntil,
+} from 'rxjs/operators';
 import { Machine, MachineConfig, interpret, State, assign } from 'xstate';
-import { fromEventPattern, Observable } from 'rxjs';
 import { StateListener, Interpreter } from 'xstate/lib/interpreter';
+
+@Injectable()
+export class UsernameService {
+  private usernames = ['foo', 'bar', 'baz'];
+
+  isUsernameUnique(username: string) {
+    return of(this.usernames).pipe(
+      delay(2_000),
+      map(usernames => usernames.includes(username)),
+    );
+  }
+}
 
 @Component({
   selector: 'app-root',
   template: `
-    <form>
+    <form *ngIf="(state | async) as s">
       <label for="username">Username</label>
       <input
         id="username"
+        #username
         autocomplete="off"
-        (blur)="setUsername($event.target.value)"
+        [style.border-color]="usernameBorderColor(s)"
       />
 
       <label for="password">Password</label>
       <input
         id="password"
+        #password
         autocomplete="off"
-        (blur)="setPassword($event.target.value)"
+        [style.border-color]="passwordBorderColor(s)"
       />
     </form>
   `,
+  providers: [UsernameService],
 })
-export class AppComponent implements OnInit {
-  state: Observable<[State<SignUpContext, SignUpEvent>, SignUpEvent]>;
-  service: Interpreter<SignUpContext, SignUpSchema, SignUpEvent>;
+export class AppComponent implements OnInit, AfterViewInit, OnDestroy {
+  @ViewChild('username') username: ElementRef;
+  @ViewChild('password') password: ElementRef;
 
-  constructor() {
-    const machine = Machine(signUpMachineConfig, {
-      actions: {
-        setPassword: assign<SignUpContext, SetPassword>({
-          password: (_, event) => event.payload.password,
-        }),
-        setUsername: assign<SignUpContext, SetUsername>({
-          username: (_, event) => event.payload.username,
-        }),
-      },
-      guards: {
-        passwordMeetsRequirements: (_, event: SetPassword) =>
-          event.payload.password.length < 8,
-      },
-    });
+  state = new BehaviorSubject<State<SignUpContext, SignUpEvent> | {}>({});
+  private service: Interpreter<SignUpContext, SignUpSchema, SignUpEvent>;
+  private destroy = new Subject();
 
+  constructor(private usernameService: UsernameService) {
     this.service = interpret(machine);
-    this.service.start();
-
-    this.state = fromEventPattern<
-      [State<SignUpContext, SignUpEvent>, SignUpEvent]
-    >((callback: StateListener<SignUpContext, SignUpEvent>) => {
-      this.service.onTransition(callback);
+    fromEventPattern<[State<SignUpContext, SignUpEvent>, SignUpEvent]>(
+      (callback: StateListener<SignUpContext, SignUpEvent>) => {
+        this.service.onTransition(callback);
+      },
+    ).subscribe(([state, event]) => {
+      this.state.next(state);
+      console.log(event, state.value);
     });
   }
 
   ngOnInit() {
-    this.state.subscribe(([state, _]) => {
-      console.log(state.value, state.context);
-    });
+    this.service.start();
 
-    this.service.send({ type: 'SET_USERNAME', payload: { username: 'FOOO' } });
-    this.service.send({
-      type: 'SET_PASSWORD',
-      payload: { password: '123456789' },
-    });
-    this.service.send({ type: 'UNIQUE_SUCCESS' });
+    // Via code:
+    // this.service.send({ type: 'SET_USERNAME', payload: { username: 'FOOO' } });
+    // this.service.send({
+    //   type: 'SET_PASSWORD',
+    //   payload: { password: '123456789' },
+    // });
+    // this.service.send({ type: 'UNIQUE_SUCCESS' });
+    // this.service.send({ type: 'SET_USERNAME', payload: { username: 'FxOOO' } });
   }
 
-  setUsername(event) {
-    this.service.send({
-      type: 'SET_USERNAME',
-      payload: { username: event },
-    });
+  ngAfterViewInit() {
+    fromEvent<any>(this.username.nativeElement, 'input')
+      .pipe(
+        tap(() =>
+          this.service.send({
+            type: 'USERNAME_INPUT',
+          }),
+        ),
+        debounceTime(447),
+        tap(event => {
+          this.service.send({
+            type: 'SET_USERNAME',
+            payload: { username: event.target.value },
+          });
+        }),
+        switchMap(event =>
+          this.usernameService.isUsernameUnique(event.target.value).pipe(
+            map(isUnique => {
+              if (isUnique) {
+                this.service.send({
+                  type: 'UNIQUE_SUCCESS',
+                });
+              } else {
+                this.service.send({
+                  type: 'UNIQUE_FAILURE',
+                });
+              }
+              return event;
+            }),
+            catchError(_ => {
+              this.service.send({
+                type: 'UNIQUE_FAILURE',
+              });
+              return of(event);
+            }),
+          ),
+        ),
+        takeUntil(this.destroy),
+      )
+      .subscribe(_ => {});
+
+    fromEvent<any>(this.password.nativeElement, 'input')
+      .pipe(
+        tap(() =>
+          this.service.send({
+            type: 'PASSWORD_INPUT',
+          }),
+        ),
+        debounceTime(200),
+        tap(event => {
+          this.service.send({
+            type: 'SET_PASSWORD',
+            payload: { password: event.target.value },
+          });
+        }),
+        takeUntil(this.destroy),
+      )
+      .subscribe(_ => {});
   }
 
-  setPassword(event) {
-    this.service.send({
-      type: 'SET_PASSWORD',
-      payload: { password: event },
-    });
+  ngOnDestroy() {
+    this.destroy.next();
+    this.destroy.complete();
+  }
+
+  usernameBorderColor(state: State<SignUpContext, SignUpEvent>) {
+    if (state.matches('username.invalid')) {
+      return 'red';
+    }
+    if (state.matches('username.valid')) {
+      return 'green';
+    }
+    if (state.matches('username.uniquePending')) {
+      return 'orange';
+    }
+    if (state.matches('username.taken')) {
+      return 'red';
+    }
+  }
+
+  passwordBorderColor(state: State<SignUpContext, SignUpEvent>) {
+    if (state.matches('password.invalid')) {
+      return 'red';
+    }
+    if (state.matches('password.valid')) {
+      return 'green';
+    }
   }
 }
 
@@ -92,14 +195,16 @@ interface SignUpSchema {
     username: {
       states: {
         idle: {};
+        editing: {};
         valid: {};
-        invalid: {};
         uniquePending: {};
+        taken: {};
       };
     };
     password: {
       states: {
         idle: {};
+        editing: {};
         valid: {};
         invalid: {};
       };
@@ -125,7 +230,21 @@ interface UniqueFailure {
   type: 'UNIQUE_FAILURE';
 }
 
-type SignUpEvent = SetUsername | SetPassword | UniqueSuccess | UniqueFailure;
+interface UsernameInput {
+  type: 'USERNAME_INPUT';
+}
+
+interface PasswordInput {
+  type: 'PASSWORD_INPUT';
+}
+
+type SignUpEvent =
+  | SetUsername
+  | SetPassword
+  | UniqueSuccess
+  | UniqueFailure
+  | UsernameInput
+  | PasswordInput;
 
 const signUpMachineConfig: MachineConfig<
   SignUpContext,
@@ -145,41 +264,64 @@ const signUpMachineConfig: MachineConfig<
       initial: 'idle',
       states: {
         idle: {},
+        editing: {},
         valid: {},
-        invalid: {},
         uniquePending: {
           on: {
             UNIQUE_SUCCESS: 'valid',
-            UNIQUE_FAILURE: 'invalid',
+            UNIQUE_FAILURE: 'taken',
           },
         },
+        taken: {},
       },
       on: {
         SET_USERNAME: {
-          actions: 'setUsername',
           target: '.uniquePending',
+          actions: assign<SignUpContext, SetUsername>({
+            username: (_, event) => event.payload.username,
+          }),
         },
+        USERNAME_INPUT: '.editing',
       },
     },
     password: {
       initial: 'idle',
       states: {
         idle: {},
+        editing: {},
         valid: {},
         invalid: {},
       },
       on: {
         SET_PASSWORD: [
           {
-            cond: 'passwordMeetsRequirements',
+            cond: (_, event: SetPassword) => event.payload.password.length < 8,
             target: '.invalid',
           },
           {
-            actions: 'setPassword',
             target: '.valid',
+            actions: assign<SignUpContext, SetPassword>({
+              password: (_, event) => event.payload.password,
+            }),
           },
         ],
+        PASSWORD_INPUT: '.editing',
       },
     },
   },
 };
+
+const machine = Machine(signUpMachineConfig, {
+  // actions: {
+  //   setPassword: assign<SignUpContext, SetPassword>({
+  //     password: (_, event) => event.payload.password,
+  //   }),
+  //   setUsername: assign<SignUpContext, SetUsername>({
+  //     username: (_, event) => event.payload.username,
+  //   }),
+  // },
+  // guards: {
+  //   passwordMeetsRequirements: (_, event: SetPassword) =>
+  //     event.payload.password.length < 8,
+  // },
+});
