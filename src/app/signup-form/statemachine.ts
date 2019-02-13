@@ -25,7 +25,7 @@ export class SignUpMachine implements OnDestroy {
   private service: Interpreter<SignUpContext, SignUpSchema, SignUpEvent>;
   private machine: StateMachine<SignUpContext, SignUpSchema, SignUpEvent>;
 
-  state: Observable<State<SignUpContext, SignUpEvent> | {}>;
+  state: Observable<SignUpState>;
 
   interpretMachine(
     options: MachineOptions<SignUpContext, SignUpEvent>,
@@ -34,10 +34,9 @@ export class SignUpMachine implements OnDestroy {
     this.machine = signUpMachine.withConfig(options, context);
     this.service = interpret(this.machine);
 
-    this.state = fromEventPattern<
-      [State<SignUpContext, SignUpEvent>, SignUpEvent]
-    >((callback: StateListener<SignUpContext, SignUpEvent>) =>
-      this.service.onTransition(callback),
+    this.state = fromEventPattern<[SignUpState, SignUpEvent]>(
+      (callback: StateListener<SignUpContext, SignUpEvent>) =>
+        this.service.onTransition(callback),
     ).pipe(
       startWith([this.machine.initialState, {} as any]),
       tap(([state, event]) => console.log(event, state.context)),
@@ -77,7 +76,7 @@ const config: MachineConfig<SignUpContext, SignUpSchema, SignUpEvent> = {
           on: {
             '': {
               target: 'uniquePending',
-              cond: ctx => Boolean(ctx && ctx.username),
+              cond: ctx => !!ctx && !!ctx.username,
             },
           },
         },
@@ -96,18 +95,27 @@ const config: MachineConfig<SignUpContext, SignUpSchema, SignUpEvent> = {
         SET_USERNAME: [
           {
             target: '.required',
-            cond: (_, event: SetUsername) =>
-              event.payload.username.length === 0,
+            cond: (_, { payload }: SetUsername) => !payload.username.length,
+            actions: assign<SignUpContext, SetUsername>({
+              username: (_, { payload }) => payload.username,
+            }),
           },
           {
             target: '.uniquePending',
             actions: assign<SignUpContext, SetUsername>({
-              username: (_, event) => event.payload.username,
+              username: (_, { payload }) => payload.username,
             }),
           },
         ],
         USERNAME_EDITING: '.editing',
         USERNAME_FOCUS: { actions: ['usernameFocus'] },
+        SUBMIT: [
+          {
+            in: '.valid',
+          },
+          { target: '.required', cond: ctx => !ctx.username.length },
+          { in: '.editing', target: '.uniquePending' },
+        ],
       },
     },
     password: {
@@ -122,27 +130,75 @@ const config: MachineConfig<SignUpContext, SignUpSchema, SignUpEvent> = {
       on: {
         SET_PASSWORD: [
           {
-            cond: (_, event: SetPassword) =>
-              event.payload.password.length === 0,
+            cond: (_, { payload }: SetPassword) => !payload.password.length,
             target: '.required',
+            actions: assign<SignUpContext, SetPassword>({
+              password: (_, { payload }) => payload.password,
+            }),
           },
           {
-            cond: (_, event: SetPassword) => event.payload.password.length < 8,
+            cond: (_, { payload }: SetPassword) =>
+              isInvalidPassword(payload.password),
             target: '.invalid',
+            actions: assign<SignUpContext, SetPassword>({
+              password: (_, { payload }) => payload.password,
+            }),
           },
           {
             target: '.valid',
             actions: assign<SignUpContext, SetPassword>({
-              password: (_, event) => event.payload.password,
+              password: (_, { payload }) => payload.password,
             }),
           },
         ],
         PASSWORD_EDITING: '.editing',
         PASSWORD_FOCUS: { actions: ['passwordFocus'] },
+        SUBMIT: [
+          {
+            in: '.valid',
+          },
+          {
+            cond: ctx => isInvalidPassword(ctx.password),
+            target: '.invalid',
+          },
+        ],
+      },
+    },
+    submit: {
+      initial: 'disabled',
+      states: {
+        disabled: {
+          on: {
+            SUBMIT: {
+              target: 'enabled',
+              in: {
+                username: 'valid',
+                password: 'valid',
+              },
+            },
+          },
+        },
+        enabled: {
+          on: {
+            SUBMIT_PENDING: 'pending',
+          },
+        },
+        pending: {
+          on: {
+            SUBMIT_SUCCESS: 'success',
+            SUBMIT_FAILURE: 'failure',
+          },
+        },
+        success: {},
+        failure: {},
       },
     },
   },
 };
+
+function isInvalidPassword(password: string) {
+  return password.length < 8;
+}
 
 const signUpMachine = Machine(config);
 
@@ -156,7 +212,11 @@ export type SignUpEvent =
   | UsernameFocus
   | SetPassword
   | PasswordEditing
-  | PasswordFocus;
+  | PasswordFocus
+  | Submit
+  | SubmitPending
+  | SubmitSuccess
+  | SubmitFailure;
 
 export interface SignUpContext {
   username: string;
@@ -183,6 +243,15 @@ export interface SignUpSchema {
         valid: {};
         invalid: {};
         required: {};
+      };
+    };
+    submit: {
+      states: {
+        disabled: {};
+        enabled: {};
+        pending: {};
+        success: {};
+        failure: {};
       };
     };
   };
@@ -220,4 +289,20 @@ export interface PasswordEditing {
 
 export interface PasswordFocus {
   type: 'PASSWORD_FOCUS';
+}
+
+export interface Submit {
+  type: 'SUBMIT';
+}
+
+export interface SubmitPending {
+  type: 'SUBMIT_PENDING';
+}
+
+export interface SubmitSuccess {
+  type: 'SUBMIT_SUCCESS';
+}
+
+export interface SubmitFailure {
+  type: 'SUBMIT_FAILURE';
 }

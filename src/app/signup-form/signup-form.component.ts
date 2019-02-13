@@ -15,6 +15,8 @@ import {
   switchMap,
   catchError,
   takeUntil,
+  filter,
+  exhaustMap,
 } from 'rxjs/operators';
 import { UsernameService } from './services/username.service';
 import { SignUpMachine, SignUpState } from './statemachine';
@@ -22,29 +24,41 @@ import { SignUpMachine, SignUpState } from './statemachine';
 @Component({
   selector: 'app-sign-up-form',
   template: `
-    <form *ngIf="(signup.state | async) as state">
-      <label for="username">Username ({{ state.value.username }})</label>
-      <input
-        type="text"
-        id="username"
-        [value]="state.context.username"
-        (focus)="signup.send({ type: 'USERNAME_FOCUS' })"
-        #username
-        autocomplete="off"
-        [style.border-color]="usernameBorderColor(state)"
-      />
+    <ng-container *ngIf="(machine.state | async) as state">
+      <div *ngIf="state.matches('submit.success'); else formInput">
+        <h1>{{ state.context.username }} is created!</h1>
+      </div>
 
-      <label for="password">Password ({{ state.value.password }})</label>
-      <input
-        type="text"
-        id="password"
-        [value]="state.context.password"
-        (focus)="signup.send({ type: 'PASSWORD_FOCUS' })"
-        #password
-        autocomplete="off"
-        [style.border-color]="passwordBorderColor(state)"
-      />
-    </form>
+      <ng-template #formInput>
+        <form (ngSubmit)="onSubmit($event)">
+          <label for="username">Username ({{ state.value.username }})</label>
+          <input
+            type="text"
+            id="username"
+            [value]="state.context.username"
+            (focus)="machine.send({ type: 'USERNAME_FOCUS' })"
+            #username
+            autocomplete="off"
+            [style.border-color]="usernameBorderColor(state)"
+          />
+
+          <label for="password">Password ({{ state.value.password }})</label>
+          <input
+            type="text"
+            id="password"
+            [value]="state.context.password"
+            (focus)="machine.send({ type: 'PASSWORD_FOCUS' })"
+            #password
+            autocomplete="off"
+            [style.border-color]="passwordBorderColor(state)"
+          />
+
+          <button type="submit" (click)="onSubmit($event)">
+            {{ state.matches('submit.pending') ? 'PENDING ...' : 'SUBMIT' }}
+          </button>
+        </form>
+      </ng-template>
+    </ng-container>
   `,
   providers: [SignUpMachine, UsernameService],
 })
@@ -57,12 +71,12 @@ export class SignUpComponent implements OnInit, AfterViewInit, OnDestroy {
   private destroy = new Subject();
 
   constructor(
-    public signup: SignUpMachine,
+    public machine: SignUpMachine,
     private usernameService: UsernameService,
   ) {}
 
   ngOnInit() {
-    this.signup.interpretMachine(
+    this.machine.interpretMachine(
       {
         actions: {
           usernameFocus: () => {
@@ -81,78 +95,20 @@ export class SignUpComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   ngAfterViewInit() {
-    fromEvent<any>(this.usernameField.nativeElement, 'input')
-      .pipe(
-        tap(() =>
-          this.signup.send({
-            type: 'USERNAME_EDITING',
-          }),
-        ),
-        debounceTime(500),
-        tap(event => {
-          this.signup.send({
-            type: 'SET_USERNAME',
-            payload: { username: event.target.value },
-          });
-        }),
-        takeUntil(this.destroy),
-      )
-      .subscribe(_ => {});
-
-    fromEvent<any>(this.passwordField.nativeElement, 'input')
-      .pipe(
-        tap(() =>
-          this.signup.send({
-            type: 'PASSWORD_EDITING',
-          }),
-        ),
-        debounceTime(500),
-        tap(event => {
-          this.signup.send({
-            type: 'SET_PASSWORD',
-            payload: { password: event.target.value },
-          });
-        }),
-        takeUntil(this.destroy),
-      )
-      .subscribe(_ => {});
-
-    this.signup.state
-      .pipe(
-        switchMap((state: SignUpState) =>
-          (state.value as any).username !== 'uniquePending'
-            ? NEVER
-            : this.usernameService
-                .isUsernameUnique(state.context.username)
-                .pipe(
-                  map(isUnique => {
-                    if (isUnique) {
-                      this.signup.send({
-                        type: 'UNIQUE_SUCCESS',
-                      });
-                    } else {
-                      this.signup.send({
-                        type: 'UNIQUE_FAILURE',
-                      });
-                    }
-                    return state;
-                  }),
-                  catchError(_ => {
-                    this.signup.send({
-                      type: 'UNIQUE_FAILURE',
-                    });
-                    return of(state);
-                  }),
-                ),
-        ),
-        takeUntil(this.destroy),
-      )
-      .subscribe(_ => {});
+    this.usernameInteractions();
+    this.passwordInteractions();
+    this.isUsernameUniqueInteractions();
+    this.submitInteractions();
   }
 
   ngOnDestroy() {
     this.destroy.next();
     this.destroy.complete();
+  }
+
+  onSubmit(event: MouseEvent) {
+    event.preventDefault();
+    this.machine.send({ type: 'SUBMIT' });
   }
 
   usernameBorderColor(state: SignUpState) {
@@ -183,5 +139,99 @@ export class SignUpComponent implements OnInit, AfterViewInit, OnDestroy {
     if (state.matches('password.required')) {
       return 'red';
     }
+  }
+
+  private usernameInteractions() {
+    fromEvent<any>(this.usernameField.nativeElement, 'input')
+      .pipe(
+        tap(() =>
+          this.machine.send({
+            type: 'USERNAME_EDITING',
+          }),
+        ),
+        debounceTime(500),
+        tap(event => {
+          this.machine.send({
+            type: 'SET_USERNAME',
+            payload: { username: event.target.value },
+          });
+        }),
+        takeUntil(this.destroy),
+      )
+      .subscribe(_ => {});
+  }
+
+  private passwordInteractions() {
+    fromEvent<any>(this.passwordField.nativeElement, 'input')
+      .pipe(
+        tap(() =>
+          this.machine.send({
+            type: 'PASSWORD_EDITING',
+          }),
+        ),
+        debounceTime(500),
+        tap(event => {
+          this.machine.send({
+            type: 'SET_PASSWORD',
+            payload: { password: event.target.value },
+          });
+        }),
+        takeUntil(this.destroy),
+      )
+      .subscribe(_ => {});
+  }
+  private isUsernameUniqueInteractions() {
+    this.machine.state
+      .pipe(
+        switchMap(state =>
+          !state.matches('username.uniquePending')
+            ? NEVER
+            : this.usernameService
+                .isUsernameUnique(state.context.username)
+                .pipe(
+                  map(isUnique => {
+                    if (isUnique) {
+                      this.machine.send({
+                        type: 'UNIQUE_SUCCESS',
+                      });
+                    } else {
+                      this.machine.send({
+                        type: 'UNIQUE_FAILURE',
+                      });
+                    }
+                    return state;
+                  }),
+                  catchError(_ => {
+                    this.machine.send({
+                      type: 'UNIQUE_FAILURE',
+                    });
+                    return of(state);
+                  }),
+                ),
+        ),
+        takeUntil(this.destroy),
+      )
+      .subscribe(_ => {});
+  }
+
+  private submitInteractions() {
+    this.machine.state
+      .pipe(
+        filter(state => state.matches('submit.enabled')),
+        tap(() => this.machine.send({ type: 'SUBMIT_PENDING' })),
+        exhaustMap(state =>
+          this.usernameService.create(state.context).pipe(
+            tap(() => this.machine.send({ type: 'SUBMIT_SUCCESS' })),
+            catchError(_ => {
+              this.machine.send({
+                type: 'SUBMIT_FAILURE',
+              });
+              return of(state);
+            }),
+          ),
+        ),
+        takeUntil(this.destroy),
+      )
+      .subscribe(_ => {});
   }
 }
