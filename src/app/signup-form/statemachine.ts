@@ -1,5 +1,5 @@
 import { Injectable, OnDestroy } from '@angular/core';
-import { BehaviorSubject, fromEventPattern, Subject } from 'rxjs';
+import { fromEventPattern, Subject, Observable } from 'rxjs';
 import {
   Machine,
   assign,
@@ -10,7 +10,14 @@ import {
   MachineOptions,
 } from 'xstate';
 import { Interpreter, StateListener } from 'xstate/lib/interpreter';
-import { takeUntil, tap, share } from 'rxjs/operators';
+import {
+  takeUntil,
+  tap,
+  map,
+  refCount,
+  publishReplay,
+  startWith,
+} from 'rxjs/operators';
 
 @Injectable()
 export class SignUpMachine implements OnDestroy {
@@ -18,7 +25,7 @@ export class SignUpMachine implements OnDestroy {
   private service: Interpreter<SignUpContext, SignUpSchema, SignUpEvent>;
   private machine: StateMachine<SignUpContext, SignUpSchema, SignUpEvent>;
 
-  state = new BehaviorSubject<State<SignUpContext, SignUpEvent> | {}>({});
+  state: Observable<State<SignUpContext, SignUpEvent> | {}>;
 
   interpretMachine(
     options: MachineOptions<SignUpContext, SignUpEvent>,
@@ -27,29 +34,20 @@ export class SignUpMachine implements OnDestroy {
     this.machine = signUpMachine.withConfig(options, context);
     this.service = interpret(this.machine);
 
-    fromEventPattern<[State<SignUpContext, SignUpEvent>, SignUpEvent]>(
-      (callback: StateListener<SignUpContext, SignUpEvent>) =>
-        this.service.onTransition(callback),
-    )
-      .pipe(
-        tap(
-          ([state, event]) => console.log(event, state.context),
-          takeUntil(this.destroy),
-        ),
-        share(),
-      )
-      .subscribe(([state, _]) => this.state.next(state));
+    this.state = fromEventPattern<
+      [State<SignUpContext, SignUpEvent>, SignUpEvent]
+    >((callback: StateListener<SignUpContext, SignUpEvent>) =>
+      this.service.onTransition(callback),
+    ).pipe(
+      startWith([this.machine.initialState, {} as any]),
+      tap(([state, event]) => console.log(event, state.context)),
+      map(([state, _]) => state),
+      publishReplay(1),
+      refCount(),
+      takeUntil(this.destroy),
+    );
 
     this.service.start();
-
-    // Via code:
-    // this.service.send({ type: 'SET_USERNAME', payload: { username: 'FOOO' } });
-    // this.service.send({
-    //   type: 'SET_PASSWORD',
-    //   payload: { password: '123456789' },
-    // });
-    // this.service.send({ type: 'UNIQUE_SUCCESS' });
-    // this.service.send({ type: 'SET_USERNAME', payload: { username: 'FxOOO' } });
   }
 
   ngOnDestroy() {
@@ -109,6 +107,7 @@ const config: MachineConfig<SignUpContext, SignUpSchema, SignUpEvent> = {
           },
         ],
         USERNAME_EDITING: '.editing',
+        USERNAME_FOCUS: { actions: ['usernameFocus'] },
       },
     },
     password: {
@@ -139,6 +138,7 @@ const config: MachineConfig<SignUpContext, SignUpSchema, SignUpEvent> = {
           },
         ],
         PASSWORD_EDITING: '.editing',
+        PASSWORD_FOCUS: { actions: ['passwordFocus'] },
       },
     },
   },
@@ -150,11 +150,13 @@ export type SignUpState = State<SignUpContext, SignUpEvent>;
 
 export type SignUpEvent =
   | SetUsername
-  | SetPassword
   | UniqueSuccess
   | UniqueFailure
   | UsernameEditing
-  | PasswordEditing;
+  | UsernameFocus
+  | SetPassword
+  | PasswordEditing
+  | PasswordFocus;
 
 export interface SignUpContext {
   username: string;
@@ -191,11 +193,6 @@ export interface SetUsername {
   payload: { username: string };
 }
 
-export interface SetPassword {
-  type: 'SET_PASSWORD';
-  payload: { password: string };
-}
-
 export interface UniqueSuccess {
   type: 'UNIQUE_SUCCESS';
 }
@@ -208,6 +205,19 @@ export interface UsernameEditing {
   type: 'USERNAME_EDITING';
 }
 
+export interface UsernameFocus {
+  type: 'USERNAME_FOCUS';
+}
+
+export interface SetPassword {
+  type: 'SET_PASSWORD';
+  payload: { password: string };
+}
+
 export interface PasswordEditing {
   type: 'PASSWORD_EDITING';
+}
+
+export interface PasswordFocus {
+  type: 'PASSWORD_FOCUS';
 }

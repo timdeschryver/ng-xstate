@@ -15,7 +15,6 @@ import {
   switchMap,
   catchError,
   takeUntil,
-  filter,
 } from 'rxjs/operators';
 import { UsernameService } from './services/username.service';
 import { SignUpMachine, SignUpState } from './statemachine';
@@ -29,6 +28,7 @@ import { SignUpMachine, SignUpState } from './statemachine';
         type="text"
         id="username"
         [value]="state.context.username"
+        (focus)="signup.send({ type: 'USERNAME_FOCUS' })"
         #username
         autocomplete="off"
         [style.border-color]="usernameBorderColor(state)"
@@ -39,6 +39,7 @@ import { SignUpMachine, SignUpState } from './statemachine';
         type="text"
         id="password"
         [value]="state.context.password"
+        (focus)="signup.send({ type: 'PASSWORD_FOCUS' })"
         #password
         autocomplete="off"
         [style.border-color]="passwordBorderColor(state)"
@@ -62,7 +63,16 @@ export class SignUpComponent implements OnInit, AfterViewInit, OnDestroy {
 
   ngOnInit() {
     this.signup.interpretMachine(
-      {},
+      {
+        actions: {
+          usernameFocus: () => {
+            this.usernameField.nativeElement.select();
+          },
+          passwordFocus: () => {
+            this.passwordField.nativeElement.select();
+          },
+        },
+      },
       {
         username: this.username,
         password: '',
@@ -73,7 +83,6 @@ export class SignUpComponent implements OnInit, AfterViewInit, OnDestroy {
   ngAfterViewInit() {
     fromEvent<any>(this.usernameField.nativeElement, 'input')
       .pipe(
-        debounceTime(100),
         tap(() =>
           this.signup.send({
             type: 'USERNAME_EDITING',
@@ -92,7 +101,6 @@ export class SignUpComponent implements OnInit, AfterViewInit, OnDestroy {
 
     fromEvent<any>(this.passwordField.nativeElement, 'input')
       .pipe(
-        debounceTime(100),
         tap(() =>
           this.signup.send({
             type: 'PASSWORD_EDITING',
