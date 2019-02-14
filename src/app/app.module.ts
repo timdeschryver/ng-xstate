@@ -3,9 +3,10 @@ import { NgModule } from '@angular/core';
 
 import { AppComponent } from './app.component';
 import { SignUpComponent } from './signup-form/signup-form.component';
+import { InviteeComponent } from './party-planner/invitee.component';
 
 @NgModule({
-  declarations: [AppComponent, SignUpComponent],
+  declarations: [AppComponent, SignUpComponent, InviteeComponent],
   imports: [BrowserModule],
   providers: [],
   bootstrap: [AppComponent],
