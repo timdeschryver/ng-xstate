@@ -1,21 +1,23 @@
 import { Injectable, OnDestroy } from '@angular/core';
-import { Subject, Observable, fromEventPattern } from 'rxjs';
+import { fromEventPattern, Observable, Subject } from 'rxjs';
 import {
-  startWith,
-  tap,
   map,
   publishReplay,
   refCount,
+  startWith,
   takeUntil,
+  tap,
 } from 'rxjs/operators';
 import {
-  State,
-  MachineConfig,
   assign,
-  StateMachine,
-  MachineOptions,
   interpret,
   Machine,
+  MachineConfig,
+  MachineOptions,
+  send,
+  State,
+  StateMachine,
+  sendParent,
 } from 'xstate';
 import { Interpreter, StateListener } from 'xstate/lib/interpreter';
 
@@ -60,20 +62,25 @@ export class InviteeMachine implements OnDestroy {
 }
 
 const config: MachineConfig<InviteeContext, InviteeSchema, InviteeEvent> = {
-  key: 'invitee',
+  id: 'invitee',
   initial: 'adding',
   context: {
+    id: '',
     invitee: '',
   },
   states: {
     adding: {
+      onEntry: ['adding'],
+      onExit: ['inviteeAdded'],
       on: {
         ADD: {
           target: 'pending',
           cond: (_, { payload }: Add) => payload.invitee.trim().length > 0,
-          actions: assign<InviteeContext, Add>({
-            invitee: (_, { payload }) => payload.invitee,
-          }),
+          actions: [
+            assign<InviteeContext, Add>({
+              invitee: (_, { payload }) => payload.invitee,
+            }),
+          ],
         },
       },
     },
@@ -83,11 +90,20 @@ const config: MachineConfig<InviteeContext, InviteeSchema, InviteeEvent> = {
         DECLINE: 'declined',
       },
     },
-    accepted: {},
-    declined: {},
+    accepted: {
+      on: {
+        DECLINE: 'declined',
+      },
+    },
+    declined: {
+      on: {
+        ACCEPT: 'accepted',
+      },
+    },
   },
 };
-const inviteeMachine = Machine(config);
+
+export const inviteeMachine = Machine(config);
 
 export type InviteeState = State<InviteeContext, InviteeEvent>;
 
@@ -101,6 +117,7 @@ export interface InviteeSchema {
 }
 
 export interface InviteeContext {
+  id: string;
   invitee: string;
 }
 

@@ -1,5 +1,15 @@
-import { Component, OnInit } from '@angular/core';
-import { InviteeMachine } from './inviteeMachine';
+import {
+  Component,
+  OnInit,
+  Output,
+  EventEmitter,
+  Input,
+  ChangeDetectionStrategy,
+  ViewChild,
+  ElementRef,
+} from '@angular/core';
+import { InviteeMachine, Add } from './invitee.machine';
+import { Invitee } from './party-planner.machine';
 
 @Component({
   selector: 'app-invitee',
@@ -9,14 +19,15 @@ import { InviteeMachine } from './inviteeMachine';
         type="text"
         *ngSwitchCase="'adding'"
         (keydown.enter)="add($event)"
+        #input
       />
 
       <p *ngSwitchCase="'accepted'" style="font-weight:bold">
-        {{ state.context.invitee }}
+        <button (click)="decline()">X</button> {{ state.context.invitee }}
       </p>
 
       <p *ngSwitchCase="'declined'" style="text-decoration: line-through">
-        {{ state.context.invitee }}
+        <button (click)="accept()">V</button> {{ state.context.invitee }}
       </p>
 
       <p *ngSwitchDefault>
@@ -24,17 +35,34 @@ import { InviteeMachine } from './inviteeMachine';
         <button (click)="decline()">X</button>
         <span>{{ state.context.invitee }}</span>
       </p>
-
-      <small>{{ state.value }}</small>
     </div>
   `,
+  changeDetection: ChangeDetectionStrategy.OnPush,
   providers: [InviteeMachine],
 })
 export class InviteeComponent implements OnInit {
+  @Input() invitee: Invitee;
+  @Output() update = new EventEmitter<{ invitee: string; status: string }>();
+
+  @ViewChild('input') input: ElementRef;
+
   constructor(public machine: InviteeMachine) {}
 
   ngOnInit() {
-    this.machine.interpretMachine({});
+    this.machine.interpretMachine(
+      {
+        actions: {
+          adding: () => {
+            setTimeout(() => {
+              this.input.nativeElement.focus();
+            });
+          },
+          inviteeAdded: (ctx, { payload }: Add) =>
+            this.update.emit({ invitee: payload.invitee, status: 'fooo' }),
+        },
+      },
+      this.invitee,
+    );
   }
 
   add(event: any) {
